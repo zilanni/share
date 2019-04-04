@@ -19,3 +19,5 @@ CTRL++  代码展开
 CTRL+Shift+-  所有代码折叠
 CTRL+Alt+<- 回到上次编辑处
 CTRL+Alt+-> 跳到前一次编辑处
+CTRL+I  实现接口
+CTRL+O  覆盖方法
