@@ -1,0 +1,2003 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.ways.services.mis004.dao.TerminalStimulateMapper">
+	
+	<resultMap type="cn.ways.services.mis004.provider.vo.SubModel" id="subModel">
+		<id property="value" column="sub_model_id"/>
+		<id property="text" column="sub_model_name"/>
+		<id property="isImport" column="isImport"/>
+		<collection property="children" ofType="cn.ways.services.mis004.provider.vo.Version">
+			<id property="value" column="version_id"/>
+			<id property="name" column="version_name"/>
+			<result property="progress" column="mix"/>
+			<result property="msrp" column="msrp"/>
+		</collection>
+	</resultMap>
+	
+
+	
+	<select id="getSingleModelTerminalAnalyzeData" resultType="cn.ways.services.mis004.provider.vo.TerminalAnalyze">
+		WITH 
+		/*获取参与计算mix的型号*/
+		 <include refid="t_versions"></include>,
+		 t_enco_data_ as
+		 (
+		 	<include refid="t_enco_data"></include>
+		 )
+		,
+		t_enco_data as (
+			select t1.* 
+			  from t_enco_data_ t1 
+			  left join dm_reward_character c 
+			    on c.reward_character_id = t1.reward_character_id 
+			 where not exists 
+				 (select a.* 
+				    from t_enco_data_ a 
+					 where '/' || c.reward_character_name1 || '/' || c.reward_character_name2 || '/' || 
+					         c.reward_character_name3 || '/' || c.reward_character_name4 || '/' || 
+					         c.reward_character_name5 like 
+					         '%/' || a.reward_item_name || '/%' 
+					     and a.sale_enco>t1.sale_enco 
+					     and a.version_id=t1.version_id 
+					     and a.ym_id=t1.ym_id 
+					     and (a.rn=1 or a.reward_character_id=1)
+				 )
+				 and (t1.rn=1 or t1.reward_character_id=1)
+		),
+		/*每个月的总激励*/
+		<include refid="t_all_incentive"></include>
+		,
+		/*单车型利润*/
+		<include refid="t_profit"></include>
+		,
+		/*月度激励*/
+		<include refid="t_month_incentive"></include>
+		,
+		/*固定折扣*/
+		t_discount_incentive AS
+		 (SELECT 
+		 	  <if test="dto.moneyOrRatio==1">
+		 		  sum(sale_enco_mix * sale_enco)
+		 	  </if>
+		 	  <if test="dto.moneyOrRatio==2">
+		 		  case when msrp>0 then sum(sale_enco_mix * sale_enco) * 100 / msrp else null end
+		 	  </if>
+			      AS sale_enco_sum, ym_id,
+			  sum(curryear_flag) as curryear_flag
+			  <if test="dto.carIdType==1">
+			 	  ,sub_model_id
+		 	  </if>
+		 	  <if test="dto.carIdType==2">
+		 	      ,version_id
+		 	  </if>
+		 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	      ,manf_brand_id
+		 	  </if>
+			    FROM t_enco_data
+			   WHERE ways_sort = '固定折扣'
+			   GROUP BY ym_id
+			   <if test="dto.carIdType==1">
+			 	   ,sub_model_id
+		 	   </if>
+		 	   <if test="dto.carIdType==2">
+		 	       ,version_id
+		 	   </if>
+		 	   <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	       ,manf_brand_id
+		 	   </if>
+		 	   <if test="dto.moneyOrRatio==2">
+		 	       ,msrp
+		 	   </if>
+		   ),
+		/*考核奖励*/
+		t_assess_incentive AS
+		 (SELECT 
+		 	<if test="dto.moneyOrRatio==1">
+		 		sum(sale_enco_mix * sale_enco)
+		 	</if>
+		 	<if test="dto.moneyOrRatio==2">
+		 		case when msrp >0 then sum(sale_enco_mix * sale_enco) * 100 / msrp else null end
+		 	</if>
+		  AS sale_enco_sum, ym_id,
+		  sum(curryear_flag) as curryear_flag_kpi
+		  <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	  </if>
+	 	  <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	  </if>
+	 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	      ,manf_brand_id
+	 	  </if>
+		    FROM t_enco_data
+		   WHERE ways_sort = '考核奖励' 
+		   GROUP BY ym_id
+		   <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	   </if>
+	 	   <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	   </if>
+	 	   <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	       ,manf_brand_id
+	 	   </if>
+	 	   <if test="dto.moneyOrRatio==2">
+	 	       ,msrp
+	 	   </if>
+		   )
+		,
+		/*数据源销量 同期年累计 销量/同比*/
+		t_sale_yoyAccSale as 
+		(
+		   <include refid="t_sale_yoyAccSale"></include>
+		   group by sl.ym_id,sl.sub_model_id,sl.standard_id
+		),
+		/*数据源销量 计算 当月 销量/同比*/
+		t_sale_yoySale as
+		 (
+		   <include refid="t_sale_yoySale"></include>
+		   group by sl.ym_id,sl.sub_model_id,sl.standard_id
+		),
+		t_data AS
+		 (SELECT dmb.manf_brand_name as manfBrandName,
+		         decode(dmb.manf_brand_prop_id, 3, 1, 0) as isImport,
+		         sm.sub_model_name AS name,
+			     sm.logo_url as image,
+		         sm.sub_model_id AS id,
+		         subYoySale.bq_acc_sales as salesAcc,
+		         subYoySale.yoy_acc_sales as salesYoyAccValue,
+		         subSale.bq_sales as sales,
+		         subSale.yoy_sales AS salesYoyValue,
+		         decode(subDiscount1.sale_enco_sum,
+		                NULL,
+		                '-',
+		                to_char(subDiscount1.sale_enco_sum, <if test="dto.moneyOrRatio==1">'FM99,999,999,999,990')</if><if test="dto.moneyOrRatio==2">'FM99,999,999,999,990.0') || '%'</if>
+		                ) AS discountExcitation,
+		         decode(subDiscount1.curryear_flag, null, 1, subDiscount1.curryear_flag) as curryearFlag,
+		         case
+		           when subDiscount1.sale_enco_sum is not null and
+		                subDiscount2.sale_enco_sum is not null then
+		                <if test="dto.moneyOrRatio==1">
+			                case when subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum > 0.5 
+			                       or subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum <![CDATA[<]]> -0.5
+		                    then 
+		                    to_char(subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum,'FM99,999,999,999,990')
+		                    else '0' end
+		                </if>
+		                <if test="dto.moneyOrRatio==2">
+		                    case when subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum > 0.05 
+			                       or subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum <![CDATA[<]]> -0.05
+		                    then 
+		                    to_char(subDiscount1.sale_enco_sum - subDiscount2.sale_enco_sum,'FM99,999,999,999,990.0') || '%'
+		                    else '0%' end
+		                </if>
+		           else
+		            '-'
+		         end as discountMomExcitation,
+		         decode(subAssess1.curryear_flag_kpi, null, 1, subAssess1.curryear_flag_kpi) as curryearFlagKpi,
+		         decode(subAssess1.sale_enco_sum,
+		                NULL,
+		                '-',
+		                to_char(subAssess1.sale_enco_sum, <if test="dto.moneyOrRatio==1">'FM99,999,999,999,990')</if><if test="dto.moneyOrRatio==2">'FM99,999,999,999,990.0') || '%'</if>
+		                ) AS assessExcitation,
+		         case
+		           when subAssess1.sale_enco_sum is not null and
+		                subAssess2.sale_enco_sum is not null then
+		                <if test="dto.moneyOrRatio==1">
+			                case when subAssess1.sale_enco_sum - subAssess2.sale_enco_sum > 0.5 
+			                       or subAssess1.sale_enco_sum - subAssess2.sale_enco_sum <![CDATA[<]]> -0.5
+		                    then 
+		                    to_char(subAssess1.sale_enco_sum - subAssess2.sale_enco_sum,'FM99,999,999,999,990')
+		                    else '0' end
+		                </if>
+		                <if test="dto.moneyOrRatio==2">
+		                    case when subAssess1.sale_enco_sum - subAssess2.sale_enco_sum > 0.05 
+			                       or subAssess1.sale_enco_sum - subAssess2.sale_enco_sum <![CDATA[<]]> -0.05
+		                    then 
+		                    to_char(subAssess1.sale_enco_sum - subAssess2.sale_enco_sum,'FM99,999,999,999,990.0') || '%'
+		                    else '0%' end
+		                </if>
+		           else
+		            '-'
+		         end as assessMomExcitation,
+		         decode(subMonth1.sale_enco_sum,
+		                NULL,
+		                '-',
+		                to_char(subMonth1.sale_enco_sum, <if test="dto.moneyOrRatio==1">'FM99,999,999,999,990')</if><if test="dto.moneyOrRatio==2">'FM99,999,999,999,990.0') || '%'</if>
+		                ) AS monthExcitation,
+		         CASE
+		           WHEN subMonth1.sale_enco_sum IS NOT NULL AND
+		                subMonth2.sale_enco_sum IS NOT NULL THEN
+		                <if test="dto.moneyOrRatio==1">
+			                case when subMonth1.sale_enco_sum - subMonth2.sale_enco_sum > 0.5 
+			                       or subMonth1.sale_enco_sum - subMonth2.sale_enco_sum <![CDATA[<]]> -0.5
+		                    then 
+		                    to_char(subMonth1.sale_enco_sum - subMonth2.sale_enco_sum,'FM99,999,999,999,990')
+		                    else '0' end
+		                </if>
+		                <if test="dto.moneyOrRatio==2">
+		                    case when subMonth1.sale_enco_sum - subMonth2.sale_enco_sum > 0.05 
+			                       or subMonth1.sale_enco_sum - subMonth2.sale_enco_sum <![CDATA[<]]> -0.05
+		                    then 
+		                    to_char(subMonth1.sale_enco_sum - subMonth2.sale_enco_sum,'FM99,999,999,999,990.0') || '%'
+		                    else '0%' end
+		                </if>
+		           ELSE
+		            '-' 
+		         END AS monthMoMValue,
+		         decode(sp1.profit,
+		                NULL,
+		                '-',
+		                to_char(sp1.profit, <if test="dto.moneyOrRatio==1">'FM99,999,999,999,990')</if><if test="dto.moneyOrRatio==2">'FM99,999,999,999,990.0') || '%'</if>
+		                ) AS profit,
+		         decode(sp1.tp,
+		                NULL,
+		                '-',
+		                to_char(sp1.tp, 'FM99,999,999,999,990')
+		                ) AS tp,
+		         CASE
+		           WHEN sp1.profit IS NOT NULL AND sp2.profit IS NOT NULL THEN
+		               <if test="dto.moneyOrRatio==1">
+			                case when sp1.profit - sp2.profit > 0.5 
+			                       or sp1.profit - sp2.profit <![CDATA[<]]> -0.5
+		                    then 
+		                    to_char(sp1.profit - sp2.profit,'FM99,999,999,999,990')
+		                    else '0' end
+		                </if>
+		                <if test="dto.moneyOrRatio==2">
+		                    case when sp1.profit - sp2.profit > 0.05 
+			                       or sp1.profit - sp2.profit <![CDATA[<]]> -0.05
+		                    then 
+		                    to_char(sp1.profit - sp2.profit,'FM99,999,999,999,990.0') || '%'
+		                    else '0%' end
+		                </if>
+		           ELSE
+		            '-'
+		         END AS profitMoMValue
+		         
+		    FROM dm_sub_model sm 
+		    left join dm_model dm
+		      on sm.model_id = dm.model_id
+		     and sm.standard_id = dm.standard_id
+		    left join dm_manf_brand dmb
+		      on dmb.manf_brand_id = dm.manf_brand_id
+		     and dmb.standard_id = dm.standard_id
+		    LEFT JOIN t_sale_yoyAccSale subYoySale
+		      ON subYoySale.sub_model_id = sm.sub_model_id
+		     and subYoySale.standard_id = sm.standard_id
+		    LEFT JOIN t_sale_yoySale subSale
+		      ON sm.sub_model_id = subSale.sub_model_id
+		     and sm.standard_id = subSale.standard_id
+		    LEFT JOIN t_discount_incentive subDiscount1
+		      ON subDiscount1.sub_model_id = sm.sub_model_id
+		     AND subDiscount1.ym_id = ${dto.ym}
+		    LEFT JOIN t_discount_incentive subDiscount2
+		      ON subDiscount2.sub_model_id = sm.sub_model_id
+		     AND subDiscount2.ym_id = ${dto.momYm}
+		    LEFT JOIN t_assess_incentive subAssess1
+		      ON subAssess1.sub_model_id = sm.sub_model_id
+		     AND subAssess1.ym_id = ${dto.ym}
+		    LEFT JOIN t_assess_incentive subAssess2
+		      ON subAssess2.sub_model_id = sm.sub_model_id
+		     AND subAssess2.ym_id = ${dto.momYm}
+		    LEFT JOIN t_month_incentive subMonth1
+		      ON subMonth1.sub_model_id = sm.sub_model_id
+		     AND subMonth1.ym_id = ${dto.ym}
+		    LEFT JOIN t_month_incentive subMonth2
+		      ON subMonth2.sub_model_id = sm.sub_model_id
+		     AND subMonth2.ym_id = ${dto.momYm}
+		    LEFT JOIN t_profit sp1
+		      ON sp1.sub_model_id = sm.sub_model_id
+		     AND sp1.ym_id = ${dto.ym}
+		    LEFT JOIN t_profit sp2
+		      ON sp2.sub_model_id = sm.sub_model_id
+		     AND sp2.ym_id = ${dto.momYm}
+		    where sm.sub_model_id in (${dto.ids})
+		      and sm.standard_id = ${userInfo.standard_id}
+		    )
+		SELECT id,
+		       name as carModel,
+		       isImport,
+		       manfBrandName,
+			   image,
+		       monthExcitation,
+		       monthMomValue,
+		       decode(sales,null,'-',sales) as sales, 
+		       decode(salesYoyValue, NULL, '-', salesYoyValue) AS salesYoyValue,
+		       decode(salesAcc,null,'-',salesAcc) as salesAcc,
+		       decode(salesYoyAccValue, NULL, '-', salesYoyAccValue) AS salesAccYoYValue,
+		       profit,
+		       tp,
+		       profitMoMValue,
+		       assessExcitation AS yearKPI,
+		       assessMomExcitation as yearMomKPI,
+		       discountExcitation as yearDiscount,
+		       curryearFlag,
+		       curryearFlagKpi,
+		       discountMomExcitation as yearMomDiscount
+		  FROM t_data
+	</select>
+
+	
+	<sql id="reward_sub_type_alone">   
+		<if test="dto.algType!=null">
+            inner join dm_reward_sub_type_alone st
+               on st.reward_sub_type_id = r.reward_sub_type_id
+              and st.org_id = ${userInfo.org_id}
+              and st.alg_type = ${dto.algType}
+        </if>
+        <if test="dto.algType == null">
+            inner join dm_reward_sub_type st
+               on st.reward_sub_type_id = r.reward_sub_type_id
+              and st.standard_id = r.standard_id
+        </if>
+	</sql>
+	
+	<sql id="mixDifList"> 
+		 <if test="dto.mixDifSign == 0">
+		     fdw_mix_roll_sales m
+         </if>
+         <if test="dto.mixDifSign == 1">
+             t_mix m 
+         </if>
+	</sql>
+	
+	<sql id="t_mix">
+		t_mix as (
+	    	    <if test="dto.mixStartYm != ''.toString() and dto.mixStartYm != null">
+	            	    select m.ym_id,m.version_id,m.sales 
+	                from fdw_mix_roll_sales m 
+	               where m.sales > 0 and m.data_type=${dto.isQuarter}  and m.ym_id between ${dto.mixStartYm} and ${dto.mixEndYm}
+            	</if>
+            	<if test="dto.mixDifList2!=null">
+                <foreach collection="dto.mixDifList2" index="index" item="item" separator=" union all ">
+                        <if test="index==0 and dto.mixStartYm != ''.toString() and dto.mixStartYm != null"> union all </if>
+			                 select ${item.fieldsYm} as ym_id,m.version_id,m.sales 
+			                 from fdw_mix_roll_sales m 
+			                 where m.sales > 0 and m.data_type=${dto.isQuarter} and m.ym_id=${item.whereYm}
+		        </foreach>
+		         
+            	</if>
+            	<if test="dto.mixYms != ''.toString() and dto.mixYms != null">
+            	    select m.ym_id,m.version_id,m.sales 
+	                from fdw_mix_roll_sales m 
+	               where m.sales > 0 and m.data_type=${dto.isQuarter} and m.ym_id in (${dto.mixYms})
+            	</if>
+            	<if test="dto.mixDifList!=null">
+                <foreach collection="dto.mixDifList" index="index" item="item" separator=" union all ">
+                        <if test="index==0 and dto.mixYms != ''.toString() and dto.mixYms != null"> union all </if>
+		                 select ${item.fieldsYm} as ym_id,m.version_id,m.sales 
+		                 from fdw_mix_roll_sales m 
+		                 where m.sales > 0 and m.data_type=${dto.isQuarter}  and m.ym_id=${item.whereYm}
+		        </foreach> 
+            	</if>
+	    )
+	</sql>
+	
+	<sql id="tpDifList">
+		<if test="dto.tpDifSign == 0">
+		    fdw_version_tp tp
+		</if>
+		<if test="dto.tpDifSign == 1">
+		    t_tp tp 
+		</if>
+	</sql>
+	
+	<sql id="t_tp">
+		t_tp as (
+			    <if test="dto.tpStartYm != ''.toString() and dto.tpStartYm != null">
+		            select m.ym_id,m.tp,m.version_id,m.unit_id,m.price_batch_id
+					   from fdw_version_tp m 
+					   where m.ym_id between ${dto.tpStartYm} and ${dto.tpEndYm} 
+					     and m.unit_id=${userInfo.org_id}
+					     and m.price_batch_id=4
+		        </if>
+		        <if test="dto.tpDifList2 != null">
+				    <foreach collection="dto.tpDifList2" index="index" item="item" separator=" union all ">
+				           <if test="index==0 and dto.tpStartYm != ''.toString()"> union all </if>
+							   select ${item.fieldsYm} as ym_id,m.tp,m.version_id,m.unit_id,m.price_batch_id
+							   from fdw_version_tp m 
+							   where m.ym_id=${item.whereYm} 
+							     and m.unit_id=${userInfo.org_id}
+							     and m.price_batch_id=4
+				    </foreach> 
+		        </if>
+		        <if test="dto.tpYms != ''.toString() and dto.tpYms != null">
+		            select m.ym_id,m.tp,m.version_id,m.unit_id,m.price_batch_id
+					   from fdw_version_tp m 
+					   where m.ym_id in (${dto.tpYms}) 
+					     and m.unit_id=${userInfo.org_id}
+					     and m.price_batch_id=4
+		        </if>
+		        <if test="dto.tpDifList != null">
+					<foreach collection="dto.tpDifList" index="index" item="item" separator=" union all ">
+				           <if test="index==0 and dto.tpYms != ''.toString() and dto.tpYms != null"> union all </if>
+						   select ${item.fieldsYm} as ym_id,m.tp,m.version_id,m.unit_id,m.price_batch_id
+						   from fdw_version_tp m 
+						   where m.ym_id=${item.whereYm} 
+						     and m.unit_id=${userInfo.org_id}
+						     and m.price_batch_id=4
+				    </foreach>
+		        </if>
+		    )
+	</sql>
+	
+	<sql id="msrpDifList">
+	   <if test="dto.msrpDifSign == 0">
+	       v_version_msrp msrp
+	   </if>
+	   <if test="dto.msrpDifSign == 1">
+	       t_msrp msrp
+	   </if>
+	</sql>
+	
+	<sql id="t_msrp">
+		t_msrp as (
+		       <if test="dto.msrpStartYm != ''.toString() and dto.msrpStartYm != null">
+		           select m.ym_id,m.msrp,m.version_id,m.unit_id,m.price_batch_id
+		                from v_version_msrp m 
+		                where m.ym_id between ${dto.msrpStartYm} and ${dto.msrpEndYm} 
+		                  and m.unit_id=${userInfo.org_id} 
+		                  and m.price_batch_id=4
+		       </if>
+		       <if test="dto.msrpDifList2 != null">
+			       <foreach collection="dto.msrpDifList2" index="index" item="item" separator=" union all ">
+			                <if test="index==0 and dto.msrpStartYm != ''.toString() and dto.msrpStartYm != null"> union all </if>
+				                select ${item.fieldsYm} as ym_id,m.msrp,m.version_id,m.unit_id,m.price_batch_id
+				                from v_version_msrp m 
+				                where m.ym_id=${item.whereYm} 
+				                  and m.unit_id=${userInfo.org_id} 
+				                  and m.price_batch_id=4
+			       </foreach> 
+	   		   </if>
+		       <if test="dto.msrpYms != ''.toString() and dto.msrpYms != null">
+		           select m.ym_id,m.msrp,m.version_id,m.unit_id,m.price_batch_id
+		                from v_version_msrp m 
+		                where m.ym_id in (${dto.msrpYms}) 
+		                  and m.unit_id=${userInfo.org_id} 
+		                  and m.price_batch_id=4
+		       </if>
+		       <if test="dto.msrpDifList != null">
+		           <foreach collection="dto.msrpDifList" index="index" item="item" separator=" union all ">
+			                <if test="index==0 and dto.msrpYms != ''.toString() and dto.msrpYms != null"> union all </if>
+			                select ${item.fieldsYm} as ym_id,m.msrp,m.version_id,m.unit_id,m.price_batch_id
+			                from v_version_msrp m 
+			                where m.ym_id=${item.whereYm} 
+			                  and m.unit_id=${userInfo.org_id} 
+			                  and m.price_batch_id=4
+			       </foreach>
+	   		   </if>
+	         )
+	</sql>
+	
+	
+	<sql id="t_versions_seg_table_B">
+	    <if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	    t_versions as (
+			select ym_id, version_id, sale_enco_mix,
+			       sum(sale_enco_mix * msrp * 10000) over(partition by ym_id) as msrp,
+			       sum(sale_enco_mix * tp * 10000) over(partition by ym_id) as tp 
+			  from (
+				     select r.ym_id, r.version_id,r.msrp,r.tp
+					,case when sum(m.sales)>0 and sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID)>0
+					then 
+						sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID)
+					else 0 end AS sale_enco_mix
+				    from (
+						SELECT r.ym_id, r.version_id,msrp.msrp,tp.tp
+					    FROM <include refid="tpDifList"></include>
+	                    inner join <include refid="msrpDifList"></include>
+	                       on tp.version_id = msrp.version_id
+	                      and tp.ym_id = msrp.ym_id
+	                      and tp.unit_id = msrp.unit_id
+	                      and tp.price_batch_id = msrp.price_batch_id
+	                    inner join fdm_mis_reward_result_ym r
+	                       on r.version_id = msrp.version_id
+	                      and r.ym_id = msrp.ym_id
+	                    <include refid="reward_sub_type_alone"></include>
+	                    inner join dm_version v
+	                       on v.version_id = tp.version_id
+	                      and v.standard_id = r.standard_id
+					   WHERE st.ways_sort in ('固定折扣', '考核奖励', '月度激励')
+					     and r.standard_id = ${userInfo.standard_id}
+					   and 
+				         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(v.sub_model_id in(" separator="," close="))">
+				         	      <if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+				         </foreach>
+				       and msrp.msrp > 0 and tp.tp > 0 and tp.unit_id = ${userInfo.org_id} and tp.price_batch_id = 4 
+				       <if test="dto.timeType==1">
+					     	and tp.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+					     </if>
+					     <if test="dto.timeType==2">
+					     	and tp.ym_id between ${dto.ym1} and ${dto.ym2}
+					     </if>
+					     <if test="dto.timeType==3">
+					     	and tp.ym_id = ${dto.ym}
+					     </if>
+					     <if test="dto.timeType==4">
+					     	and tp.ym_id in (${dto.ym1}, ${dto.ym2})
+					     </if>
+					     group by r.ym_id, r.version_id, msrp.msrp, tp.tp
+					  ) r 
+					  left join 
+					  <include refid="mixDifList"></include>
+						 on m.version_id = r.version_id
+						and m.ym_id = r.ym_id
+						<if test="dto.mixDifSign == 0">
+						    and m.data_type=${dto.isQuarter}
+				        </if>
+					  group by r.ym_id, r.version_id, r.msrp, r.tp
+				  )
+		)
+	</sql>
+	
+	
+	<sql id="t_versions_seg_table">
+	    <if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	   t_versions as (
+			select r.ym_id, r.version_id,r.sale_enco_mix,
+			       sum(r.sale_enco_mix*msrp*10000) over (partition by r.ym_id
+			       	  <if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>
+			       ) as msrp,
+	   			   sum(r.sale_enco_mix*tp*10000) over (partition by r.ym_id
+			       	  <if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>
+	   			   ) as tp 
+	   			   <if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>
+			  from (
+			  		select r.ym_id, r.version_id, r.msrp, r.tp
+			  		       <if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>
+				          ,case when 
+				               sum(m.sales)>0 and sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID
+							<if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>) >0
+							then 
+							sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID
+											<if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>)
+							else 0 end
+							 AS sale_enco_mix
+		    from (
+					SELECT r.ym_id, r.version_id,msrp.msrp,tp.tp
+					<if test="dto.buyCarId == 'allSeg'.toString()">,dmb.manf_brand_id</if>
+				    FROM <include refid="tpDifList"></include>
+                    inner join <include refid="msrpDifList"></include>
+                       on msrp.version_id = tp.version_id
+                     and msrp.ym_id = tp.ym_id
+                     and msrp.price_batch_id = tp.price_batch_id
+                     and msrp.unit_id = tp.unit_id
+                    inner join fdm_mis_reward_result_ym r
+                      on r.version_id = msrp.version_id
+                      and r.ym_id = msrp.ym_id
+                    <include refid="reward_sub_type_alone"></include>
+				    left join dm_version v
+				      on v.version_id = r.version_id
+				     and v.standard_id = r.standard_id
+				   <if test="dto.buyCarId == 'allSeg'.toString()">
+				   	   inner join dm_sub_model sm
+					      on sm.sub_model_id = v.sub_model_id
+					     and sm.standard_id = v.standard_id
+					   inner join dm_model dm
+					      on dm.model_id = sm.model_id
+					     and dm.standard_id = sm.standard_id
+					   inner join dm_manf_brand dmb
+					      on dmb.manf_brand_id = dm.manf_brand_id
+					     and dmb.standard_id = dm.standard_id
+				   </if>
+				   WHERE 
+				      st.ways_sort in ('固定折扣', '考核奖励', '月度激励')
+				      and r.standard_id = ${userInfo.standard_id}
+				     <if test="dto.buyCarId == 'seg'.toString()">
+					     and 
+					     <foreach collection="dto.idsList" item="item" index="index" open="(v.sub_model_id in (" close="))" separator=",">
+						          <if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+						 </foreach>
+				     </if>
+				     <if test="dto.buyCarId == 'allSeg'.toString()">
+				         and 
+				         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(v.sub_model_id in(" separator="," close="))">
+				         	      <if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+				         </foreach>
+				     </if>
+				     <if test="dto.timeType==1">
+				     	and r.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+				     </if>
+				     <if test="dto.timeType==2">
+				     	and r.ym_id between ${dto.ym1} and ${dto.ym2}
+				     </if>
+				     <if test="dto.timeType==3">
+				     	and r.ym_id = ${dto.ym}
+				     </if>
+				     <if test="dto.timeType==4">
+				     	and r.ym_id in (${dto.ym1}, ${dto.ym2})
+				     </if>
+				     and msrp.msrp > 0 and tp.tp > 0 
+				     and tp.price_batch_id = 4     and tp.unit_id = ${userInfo.org_id} 
+				     group by r.ym_id, r.version_id, msrp.msrp, tp.tp
+				              <if test="dto.buyCarId == 'allSeg'.toString()">,dmb.manf_brand_id</if>
+				  ) r 
+				  left join 
+				  <include refid="mixDifList"></include>
+					 on m.version_id = r.version_id
+					and m.ym_id = r.ym_id
+					<if test="dto.mixDifSign == 0">
+					    and m.data_type=${dto.isQuarter}
+			        </if>
+				  group by r.ym_id, r.version_id, r.msrp, r.tp
+				           <if test="dto.buyCarId == 'allSeg'.toString()">,r.manf_brand_id</if>
+			  ) r
+		)
+	</sql>
+	
+	<sql id="t_seg_name">
+		  <if test="dto.segment==1">
+		      select s1.segment_name as name
+			   from dm_segment s1
+			  inner join dm_segment s2
+			     on s1.segment_id = s2.parent_segment_id
+			    and s1.standard_id = s2.standard_id
+		  </if>
+		  <if test="dto.segment==2">
+			  select s2.segment_name as name
+			   from dm_segment s2
+		  </if>
+			  inner join dm_sub_model_segment subseg
+			     on subseg.segment_id = s2.segment_id
+			    and subseg.standard_id = s2.standard_id
+			    and s2.segment_level = 2
+		  <if test="dto.carType==1">
+			    and subseg.sub_model_id = ${dto.myIds}
+		  </if>
+		  <if test="dto.carType==2">
+		  		and subseg.sub_model_id = (
+		  			select distinct sub_model_id
+			           from dm_version dv
+			          where dv.version_id in (${dto.myIds})
+			            and dv.standard_id = ${userInfo.standard_id}
+		  		)
+		  </if>
+		  where s2.standard_id = ${userInfo.standard_id}
+	</sql>
+	
+	<sql id="t_versions_seg_month_excitation">
+	    <if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	    t_versions as (
+	        <if test="dto.moneyOrRatio==2">
+				select r.*,
+				       sum(r.sale_enco_mix*msrp.msrp*10000) over (partition by r.ym_id) as msrp
+				  from (
+	        </if>
+				    select r.ym_id, r.version_id, r.sub_model_id
+				    ,sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID) AS sale_enco_mix
+					from (											
+						SELECT r.ym_id, r.version_id, v.sub_model_id
+						    FROM fdm_mis_reward_result_ym r
+						   <include refid="reward_sub_type_alone"></include>
+						   inner join <include refid="tpDifList"></include>
+						      on tp.version_id = r.version_id
+						     and tp.ym_id = r.ym_id
+						   inner join <include refid="msrpDifList"></include>
+						      on msrp.version_id = r.version_id
+						     and msrp.ym_id = r.ym_id
+						     and msrp.price_batch_id = tp.price_batch_id
+					         and msrp.unit_id = tp.unit_id
+						   inner join dm_version v
+						      on r.version_id = v.version_id
+						   WHERE st.ways_sort in ('固定折扣', '考核奖励', '月度激励')
+						     and r.standard_id = ${userInfo.standard_id}
+						     <if test="dto.timeType==1">
+						     	and r.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+						     </if>
+						     <if test="dto.timeType==2">
+						     	and r.ym_id between ${dto.ym1} and ${dto.ym2}
+						     </if>
+						     <if test="dto.timeType==3">
+						     	and r.ym_id = ${dto.ym}
+						     </if>
+						     <if test="dto.timeType==4">
+						     	and r.ym_id in (${dto.ym1}, ${dto.ym2})
+						     </if>
+						     and v.sub_model_id in (${dto.authSegSubModelIds})
+						     and v.standard_id = ${userInfo.standard_id}
+						     and tp.unit_id=${userInfo.org_id} 
+						     and msrp.unit_id=${userInfo.org_id} 
+				             and msrp.price_batch_id=4
+						     and tp.price_batch_id=4
+						     group by r.ym_id,r.version_id,v.sub_model_id
+				     ) r 
+				     left join 
+				     <include refid="mixDifList"></include>
+					    on m.version_id = r.version_id
+					   and m.ym_id = r.ym_id
+					   and m.sales > 0
+					   <if test="dto.mixDifSign == 0">
+					       and m.data_type=${dto.isQuarter}
+			           </if>
+					 group by r.ym_id,r.version_id,r.sub_model_id
+				  <if test="dto.moneyOrRatio==2">
+					  ) r
+					   left join 
+					   <include refid="msrpDifList"></include>
+					      on msrp.version_id = r.version_id
+					     and msrp.ym_id = r.ym_id
+				  </if>
+		)
+	</sql>
+	
+	
+	<sql id="t_versions_seg">
+		<if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	    t_versions as (
+			select ym_id,
+                   version_id,
+                   sub_model_id,
+                   sale_enco_mix,
+                   sum(sale_enco_mix*msrp*10000) over (partition by ym_id) as msrp,
+                   sum(sale_enco_mix*tp*10000) over (partition by ym_id) as tp 
+			  from (
+					select r.ym_id, r.version_id, r.msrp, r.tp, r.sub_model_id
+			    	,sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID) AS sale_enco_mix
+					from (											
+						SELECT r.ym_id, r.version_id, v.sub_model_id, msrp.msrp, tp.tp
+						    FROM <include refid="tpDifList"></include>
+		                    inner join <include refid="msrpDifList"></include>
+		                       on tp.version_id = msrp.version_id
+		                      and tp.ym_id = msrp.ym_id
+		                      and tp.unit_id = msrp.unit_id
+		                      and tp.price_batch_id = msrp.price_batch_id
+		                    inner join fdm_mis_reward_result_ym r
+		                       on r.version_id = msrp.version_id
+		                      and r.ym_id = msrp.ym_id
+		                    <include refid="reward_sub_type_alone"></include>
+		                    inner join dm_version v
+		                       on v.version_id = tp.version_id
+		                      and v.standard_id = ${userInfo.standard_id}
+						   WHERE st.ways_sort in ('固定折扣', '考核奖励', '月度激励')
+						     and r.standard_id = ${userInfo.standard_id}
+						   and v.sub_model_id in (${dto.authSegSubModelIds})
+					       and msrp.msrp > 0 and tp.tp > 0 and tp.unit_id = ${userInfo.org_id} and tp.price_batch_id = 4 
+					         <if test="dto.timeType==1">
+						     	and tp.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+						     </if>
+						     <if test="dto.timeType==2">
+						     	and tp.ym_id between ${dto.ym1} and ${dto.ym2}
+						     </if>
+						     <if test="dto.timeType==3">
+						     	and tp.ym_id = ${dto.ym}
+						     </if>
+						     <if test="dto.timeType==4">
+						     	and tp.ym_id in (${dto.ym1}, ${dto.ym2})
+						     </if>
+						     group by r.ym_id, r.version_id, v.sub_model_id, msrp.msrp, tp.tp
+					     ) r 
+					     left join 
+					     <include refid="mixDifList"></include>
+						    on m.version_id = r.version_id
+						   and m.ym_id = r.ym_id
+						   and m.sales > 0
+						   <if test="dto.mixDifSign == 0">
+						       and m.data_type=${dto.isQuarter}
+				           </if>
+						 group by r.ym_id,r.version_id,r.sub_model_id,r.msrp,r.tp
+				  ) 
+		)
+	</sql>
+	
+	<sql id="t_enco_data">
+		SELECT R.YM_ID,
+		         r.sale_enco,
+		         r.curryear_flag,
+		         r.reward_character_id,
+		         r.reward_item_name,
+		         v.msrp,
+		         v.sale_enco_mix,
+		         st.ways_sort,
+		         row_number() OVER(partition by r.version_id, r.ym_id, r.reward_character_id ORDER BY r.sale_enco desc,st.reward_sub_type_id asc,st.priority asc) rn,
+		         v.version_id
+		         <if test="dto.carIdType==1">
+			         ,v.sub_model_id
+		         </if>
+		         <if test="dto.carIdType==3 or dto.carIdType==4">
+		             ,v.manf_brand_id
+		         </if>
+		    FROM t_versions v
+		   inner join FDM_MIS_REWARD_RESULT_YM r
+		      on v.version_id = r.version_id
+		     and v.ym_id = r.ym_id
+		   <include refid="reward_sub_type_alone"></include>
+		   WHERE st.ways_sort in (${dto.ways_sort})
+		         and r.standard_id = ${userInfo.standard_id}
+		         and r.reward_sub_type_id in 
+		         <if test="userInfo.award_list == null">
+		         	('')
+		         </if>
+		         <if test="userInfo.award_list != null">
+			         <foreach collection="userInfo.award_list" index="index" item="item" open="(" close=")" separator=",">
+			                  ${item.award_id}
+			         </foreach>
+		         </if>
+		     <if test="dto.timeType==1">
+		     	and r.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+		     </if>
+		     <if test="dto.timeType==2">
+		     	and r.ym_id between ${dto.ym1} and ${dto.ym2}
+		     </if>
+		     <if test="dto.timeType==3">
+		     	and r.ym_id = ${dto.ym}
+		     </if>
+		     <if test="dto.timeType==4">
+		     	and r.ym_id in (${dto.ym1}, ${dto.ym2})
+		     </if>
+	</sql>
+	
+	<sql id="t_sale_yoyAccSale">
+		select 
+		      <if test="dto.carIdType==3 or dto.carIdType==4">
+		         v.manf_brand_id,
+		      </if>
+		      <if test="dto.carIdType==2">
+		         v.version_id,
+		      </if>
+		      <if test="dto.carIdType==1">
+		         sl.sub_model_id,
+		      </if>
+		      sl.ym_id,
+		      sl.standard_id,
+		      decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.BQ_YEARACC_WS_QTY),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.BQ_YEARACC_SALES),
+				    	</if>
+	                null,
+	                '-',
+	                to_char(
+					    	<if test="dto.dataSource==1 or dto.dataSource==5">
+							    sum(sl.BQ_YEARACC_WS_QTY),
+					    	</if>
+					    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+					    		sum(sl.BQ_YEARACC_SALES),
+					    	</if>
+	                'FM99,999,999,999,990')) as bq_acc_sales,
+	          decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.BQ_YEARACC_WS_QTY),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.BQ_YEARACC_SALES),
+				    	</if>
+	                null,
+	                0,
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.BQ_YEARACC_WS_QTY)
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.BQ_YEARACC_SALES)
+				    	</if>
+	                ) as bq_acc_sales2,
+	          case when 
+	                   <if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.TQ_YEARACC_WS_QTY) is not null and sum(sl.TQ_YEARACC_WS_QTY)>0
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.TQ_YEARACC_SALES) is not null and sum(sl.TQ_YEARACC_SALES)>0
+				    	</if>
+				    	 and
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.BQ_YEARACC_WS_QTY)
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.BQ_YEARACC_SALES)
+				    	</if>
+				    	is not null then 
+				    	to_char(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    (sum(sl.BQ_YEARACC_WS_QTY) - sum(sl.TQ_YEARACC_WS_QTY)) / sum(sl.TQ_YEARACC_WS_QTY)  * 100
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		(sum(sl.BQ_YEARACC_SALES) - sum(sl.TQ_YEARACC_SALES)) / sum(sl.TQ_YEARACC_SALES)  * 100
+				    	</if>
+				    	,'FM99,999,999,999,990.0') || '%'
+				    	else '-' 
+				    	end as yoy_acc_sales 
+	    from 
+	    	<if test="dto.dataSource==1">
+			    FDW_CPCA_SUB_MODEL_SALES sl
+	    	</if>
+	    	<if test="dto.dataSource==2">
+	    		FDW_CPCA_SUB_MODEL_SALES sl
+	    	</if>
+	    	<if test="dto.dataSource==3">
+	    		FDW_TERM_SUB_MODEL sl
+	    	</if>
+	    	<if test="dto.dataSource==4">
+	    		FDW_REG_INSU01_SUB_MODEL sl
+	    	</if>
+	    	<if test="dto.dataSource==5">
+	    		FDW_CAAM_SUB_MODEL sl
+	    	</if>
+	    	<include refid="t_sale_where"></include>
+	</sql>
+	
+	<sql id="t_sale_momSale">
+		select 
+			<if test="dto.carIdType==3 or dto.carIdType==4">
+	           v.manf_brand_id,
+	        </if>
+	        <if test="dto.carIdType==2">
+	           v.version_id,
+	        </if>
+	        <if test="dto.carIdType==1">
+	           sl.sub_model_id,
+	        </if>
+	        sl.ym_id,
+	        sl.standard_id,
+			decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales),
+				    	</if>
+	                null,
+	                '-',
+	                to_char(
+					    	<if test="dto.dataSource==1 or dto.dataSource==5">
+							    sum(sl.bq_ws_qty),
+					    	</if>
+					    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+					    		sum(sl.bq_sales),
+					    	</if>
+	                'FM99,999,999,999,990')) as bq_sales,
+	         decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales),
+				    	</if>
+	                null,
+	                0,
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty)
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales)
+				    	</if>
+	                ) as bq_sales2,
+		 	 case
+	           when 
+			    	<if test="dto.dataSource==1 or dto.dataSource==5">
+					    sum(sl.bq_ws_qty)
+			    	</if>
+			    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+			    		sum(sl.bq_sales)
+			    	</if>
+			        is not null and
+			        <if test="dto.dataSource==1 or dto.dataSource==5">
+					    sum(sl.sq_ws_qty) is not null and sum(sl.sq_ws_qty)>0
+			    	</if>
+			    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+			    		sum(sl.sq_sales) is not null and sum(sl.sq_sales)>0
+			    	</if> 
+			    	then 
+	            to_char(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						     (sum(sl.bq_ws_qty) - sum(sl.sq_ws_qty))* 100 / sum(sl.sq_ws_qty)  
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		 (sum(sl.bq_sales) - sum(sl.sq_sales))*100 / sum(sl.sq_sales)  
+				    	</if>
+	                    ,'FM99,999,999,999,990.0') || '%'
+	           else
+	            '-'
+	         end as mom_sales
+	    from 
+	    	<if test="dto.dataSource==1">
+			    FDW_CPCA_SUB_MODEL_SALES sl
+	    	</if>
+	    	<if test="dto.dataSource==2">
+	    		FDW_CPCA_SUB_MODEL_SALES sl
+	    	</if>
+	    	<if test="dto.dataSource==3">
+	    		FDW_TERM_SUB_MODEL sl
+	    	</if>
+	    	<if test="dto.dataSource==4">
+	    		FDW_REG_INSU01_SUB_MODEL sl
+	    	</if>
+	    	<if test="dto.dataSource==5">
+	    		FDW_CAAM_SUB_MODEL sl
+	    	</if>
+	    	<include refid="t_sale_where"></include>
+	</sql>
+
+    
+	<sql id="t_sale_yoySale">
+		select 
+			<if test="dto.carIdType==3 or dto.carIdType==4">
+	           v.manf_brand_id,
+	        </if>
+	        <if test="dto.carIdType==2">
+	           v.version_id,
+	        </if>
+	        <if test="dto.carIdType==1">
+	           sl.sub_model_id,
+	        </if>
+	        sl.ym_id,
+	        sl.standard_id,
+			decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales),
+				    	</if>
+	                null,
+	                '-',
+	                to_char(
+					    	<if test="dto.dataSource==1 or dto.dataSource==5">
+							    sum(sl.bq_ws_qty),
+					    	</if>
+					    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+					    		sum(sl.bq_sales),
+					    	</if>
+	                'FM99,999,999,999,990')) as bq_sales,
+	         decode(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty),
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales),
+				    	</if>
+	                null,
+	                0,
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						    sum(sl.bq_ws_qty)
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		sum(sl.bq_sales)
+				    	</if>
+	                ) as bq_sales2,
+		 	 case
+	           when 
+			    	<if test="dto.dataSource==1 or dto.dataSource==5">
+					    sum(sl.bq_ws_qty)
+			    	</if>
+			    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+			    		sum(sl.bq_sales)
+			    	</if>
+			        is not null and
+			        <if test="dto.dataSource==1 or dto.dataSource==5">
+					    sum(sl.tq_ws_qty) is not null and sum(sl.tq_ws_qty)>0
+			    	</if>
+			    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+			    		sum(sl.tq_sales) is not null and sum(sl.tq_sales)>0
+			    	</if>
+			    	then 
+	            to_char(
+				    	<if test="dto.dataSource==1 or dto.dataSource==5">
+						     (sum(sl.bq_ws_qty) - sum(sl.tq_ws_qty))* 100 / sum(sl.tq_ws_qty)  
+				    	</if>
+				    	<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+				    		 (sum(sl.bq_sales) - sum(sl.tq_sales))* 100 / sum(sl.tq_sales)  
+				    	</if>
+	                    ,'FM99,999,999,999,990.0') || '%'
+	           else
+	            '-'
+	         end as yoy_sales
+	    from 
+	        <if test="dto.salesDifSign != 1">
+		    	<if test="dto.dataSource==1">
+				    FDW_CPCA_SUB_MODEL_SALES sl
+		    	</if>
+		    	<if test="dto.dataSource==2">
+		    		FDW_CPCA_SUB_MODEL_SALES sl
+		    	</if>
+		    	<if test="dto.dataSource==3">
+		    		FDW_TERM_SUB_MODEL sl
+		    	</if>
+		    	<if test="dto.dataSource==4">
+		    		FDW_REG_INSU01_SUB_MODEL sl
+		    	</if>
+		    	<if test="dto.dataSource==5">
+		    		FDW_CAAM_SUB_MODEL sl
+		    	</if>
+	        </if>
+	        <if test="dto.salesDifSign == 1">
+			    (
+					select  
+						${dto.salesMaxYm} as ym_id,sl.sub_model_id,sl.standard_id
+						<if test="dto.dataSource==1 or dto.dataSource==5">
+							,sl.bq_ws_qty,sl.tq_ws_qty
+						</if>
+						<if test="dto.dataSource==2 or dto.dataSource==3 or dto.dataSource==4">
+							,sl.bq_sales,sl.tq_sales
+						</if>
+					from 
+						<if test="dto.dataSource==1">
+						    FDW_CPCA_SUB_MODEL_SALES sl
+				    	</if>
+				    	<if test="dto.dataSource==2">
+				    		FDW_CPCA_SUB_MODEL_SALES sl
+				    	</if>
+				    	<if test="dto.dataSource==3">
+				    		FDW_TERM_SUB_MODEL sl
+				    	</if>
+				    	<if test="dto.dataSource==4">
+				    		FDW_REG_INSU01_SUB_MODEL sl
+				    	</if>
+				    	<if test="dto.dataSource==5">
+				    		FDW_CAAM_SUB_MODEL sl
+				    	</if>
+					  where sl.ym_id = ${dto.salesMaxYm} and sl.standard_id = ${userInfo.standard_id}
+			    ) sl 
+	        </if>
+	        <include refid="t_sale_where"></include>
+	</sql>
+
+	
+	<sql id="t_sale_where">
+		 <if test="dto.buyCarId == 'seg'.toString()">
+		 	 where 
+		 	 <foreach collection="dto.idsList" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+		         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+		     </foreach>
+	         <include refid="t_sale_time"></include>
+		 </if>
+		 <if test="dto.buyCarId == 'allSeg'.toString() and dto.carIdType!=4">
+		 	 where 
+	         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+		         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+		     </foreach>
+	         <include refid="t_sale_time"></include>
+		 </if>
+		 <if test="dto.buyCarId == 'allSeg'.toString() and dto.carIdType==4">
+		     inner join dm_sub_model sm
+		        on sm.sub_model_id = sl.sub_model_id
+		       and sm.standard_id = sl.standard_id
+		     inner join dm_model dm
+		        on dm.model_id = sm.model_id
+		       and dm.standard_id = sm.standard_id
+		     inner join dm_manf_brand v
+		        on v.manf_brand_id = dm.manf_brand_id
+		       and v.standard_id = dm.standard_id
+		 	 where 
+	         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+		         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+		     </foreach>
+	         <include refid="t_sale_time"></include>
+		 </if>
+		 <if test="dto.buyCarId == 'singleSeg'.toString()">
+		     <if test="dto.segment==1">
+			  inner join dm_sub_model_segment subseg
+			     on subseg.sub_model_id = sl.sub_model_id
+			    and subseg.standard_id = sl.standard_id
+			  inner join dm_segment s2
+			     on s2.segment_id = subseg.segment_id
+			    and s2.standard_id = subseg.standard_id
+			  inner join dm_segment s1
+			     on s1.segment_id = s2.parent_segment_id
+			    and s1.standard_id = s2.standard_id
+			  inner join dm_segment ss2
+			     on ss2.parent_segment_id = s1.segment_id
+			    and ss2.standard_id = s1.standard_id
+			  inner join dm_sub_model_segment subseg2
+			     on subseg2.segment_id = ss2.segment_id
+			    and subseg2.standard_id = ss2.standard_id
+			    <if test="dto.carType==1">
+				   and subseg2.sub_model_id = ${dto.myIds}
+			    </if>
+			    <if test="dto.carType==2">
+			        and subseg2.sub_model_id =
+			       (select distinct sub_model_id
+			          from dm_version
+			         where version_id in (${dto.myIds}))
+			         and 
+			         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+				         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+				     </foreach>
+			    </if>
+		   </if>
+		   <if test="dto.segment==2">
+		   	   inner join dm_sub_model_segment subseg
+				  on subseg.sub_model_id = sl.sub_model_id
+				 and subseg.standard_id = sl.standard_id
+			   inner join dm_sub_model_segment subseg2
+				  on subseg2.segment_id = subseg.segment_id
+				 and subseg2.standard_id = subseg.standard_id
+			   <if test="dto.carType==1">
+				   and subseg2.sub_model_id = ${dto.myIds}
+			   </if>
+			   <if test="dto.carType==2">
+			        and subseg2.sub_model_id =
+			       (select distinct sub_model_id
+			          from dm_version
+			         where version_id in (${dto.myIds}))
+			         and 
+			         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+				         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+				     </foreach>
+			   </if>
+		   </if>
+		 	 where 1=1
+		 	 and 
+		 	 <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+		         	  <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+		     </foreach>
+		 	 <include refid="t_sale_time"></include>
+		 </if>
+		 <if test="dto.buyCarId != 'seg'.toString() and dto.buyCarId != 'allSeg'.toString()">
+		 	 <if test="dto.carIdType==1">
+		         where 
+		         <foreach collection="dto.idsList" item="item" index="index" open="(sl.sub_model_id in (" close="))" separator=",">
+				          <if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+				 </foreach>
+		         <include refid="t_sale_time"></include>
+		     </if>
+		     <if test="dto.carIdType==3">
+		        inner join dm_sub_model sm
+				    on sl.sub_model_id = sm.sub_model_id
+				   and sl.standard_id = sm.standard_id 
+				inner join dm_model dm
+				    on dm.model_id = sm.model_id
+				   and dm.standard_id = sm.standard_id
+				inner join dm_manf_brand v
+				    on v.manf_brand_id = dm.manf_brand_id
+				   and v.standard_id = dm.standard_id
+				where 
+			      v.manf_id || '-' || v.brand_id in (${dto.ids})
+			      and 
+		          <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+			         	<if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+			      </foreach>
+			    <include refid="t_sale_time"></include>
+		     </if>
+		     <if test="dto.carIdType==4">
+		    	inner join dm_sub_model sm
+				   on sl.sub_model_id = sm.sub_model_id
+				  and sl.standard_id = sm.standard_id
+				inner join dm_model v
+				   on v.model_id = sm.model_id
+				  and v.standard_id = sm.standard_id
+		        <if test="dto.ids != null and dto.ids != ''">
+		        	where v.manf_brand_id in (${dto.ids})
+		        	and 
+		        	<foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sl.sub_model_id in (" separator="," close="))">
+			         	<if test="(index % 999) == 998"> NULL ) OR sl.sub_model_id IN (</if>${item}
+			        </foreach>
+		        </if>
+		        <if test="dto.ids == null or dto.ids == ''">
+		        	where 
+		        	<foreach collection="userInfo.sub_model_id" index="index" item="item" open="(sm.sub_model_id in (" separator="," close="))">
+			         	<if test="(index % 999) == 998"> NULL ) OR sm.sub_model_id IN (</if>${item}
+			        </foreach>
+		        </if>
+				<include refid="t_sale_time"></include>
+		     </if>
+		 </if>
+		 and sl.standard_id = ${userInfo.standard_id}
+	</sql>
+
+	<sql id="t_sale_time">
+	     <if test="dto.salesDifSign != 1">
+			 <if test="dto.timeType==1">
+		     	and sl.ym_id = ${dto.ym2}
+		     </if>
+		     <if test="dto.timeType==2">
+		     	and sl.ym_id = ${dto.ym2}
+		     </if>
+		     <if test="dto.timeType==3">
+		     	and sl.ym_id = ${dto.ym}
+		     </if>
+		     <if test="dto.timeType==4">
+		     	and sl.ym_id = ${dto.ym2}
+		     </if>
+	     </if>
+	     <if test="dto.salesDifSign == 1">
+		     and sl.ym_id = ${dto.salesMaxYm}
+	     </if>
+	</sql>
+
+	<sql id="t_cost">
+		/*成本*/
+		t_cost as (
+			SELECT 
+		 		sum(msrp - sale_enco_mix * sale_enco) AS cost, ym_id
+		 	 <if test="dto.carIdType==1">
+			 	 ,sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,manf_brand_id
+		 	 </if>
+		    FROM t_enco_data
+		   GROUP BY ym_id
+		     <if test="dto.carIdType==1">
+			 	 ,sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,manf_brand_id
+		 	 </if>
+		)
+	</sql>
+	
+	<sql id="t_all_incentive">
+		/*每个月的总激励*/
+		t_all_incentive AS
+		 (SELECT 
+		 	<if test="dto.moneyOrRatio==1">
+		 		sum(t.sale_enco_mix * t.sale_enco)
+		 	</if>
+		 	<if test="dto.moneyOrRatio==2">
+		 		case when t.msrp >0 then sum(t.sale_enco_mix * t.sale_enco) * 100 / t.msrp else null end
+		 	</if>
+		 	 AS sale_enco_sum, t.ym_id
+		 	 <if test="dto.carIdType==1">
+			 	 ,sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,manf_brand_id
+		 	 </if>
+		    FROM t_enco_data t
+		   GROUP BY t.ym_id
+		     <if test="dto.carIdType==1">
+			 	 ,t.sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,t.version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,t.manf_brand_id
+		 	 </if>
+		 	 <if test="dto.moneyOrRatio==2">
+		 	 	 ,t.msrp
+		 	 </if>
+		   )
+	</sql>
+	
+	
+	<sql id="t_profit">
+		t_sub_manf_profit as (
+		   select
+		     t.tp,
+		     t.msrp,
+		     t.ym_id
+		     <if test="dto.carIdType==1">
+			 	 ,t.sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,t.version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,t.manf_brand_id
+		 	 </if>
+		   from t_versions t
+		   GROUP BY t.ym_id, t.tp, t.msrp
+		   	 <if test="dto.carIdType==1">
+			 	 ,t.sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     ,t.version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     ,t.manf_brand_id
+		 	 </if>
+		),
+		/*利润*/
+		t_profit as (
+		   select 
+		          <if test="dto.tpFourthWeekDifSign == 0">
+			   		  <if test="dto.moneyOrRatio==1">
+				          (nvl(t1.tp - t1.msrp,0) + nvl(t2.sale_enco_sum,0)) as profit,
+			   		  </if>
+			   		  <if test="dto.moneyOrRatio==2">
+			   		      case when t1.msrp >0 then to_char((t1.tp - t1.msrp) * 100 / t1.msrp + nvl(t2.sale_enco_sum, 0)) else null end as profit,
+			   		  </if>
+			      </if>
+			      <if test="dto.tpFourthWeekDifSign == 1">
+			          0 as profit,
+			      </if>
+			      <if test="dto.moneyOrRatio==1">
+			          t1.msrp - t1.tp as discount,
+		   		  </if>
+		   		  <if test="dto.moneyOrRatio==2">
+			          case when t1.msrp > 0 then (t1.msrp - t1.tp) * 100 / t1.msrp else null end as discount,
+		   		  </if>
+		          t1.msrp,
+		          t1.tp,
+		          t1.ym_id
+		          <if test="dto.carIdType==1">
+				 	  ,t1.sub_model_id
+			 	  </if>
+			 	  <if test="dto.carIdType==2">
+			 	      ,t1.version_id
+			 	  </if>
+			 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+			 	      ,t1.manf_brand_id
+			 	  </if>
+		   from t_sub_manf_profit t1
+		   left join t_all_incentive t2
+		      on t1.ym_id = t2.ym_id
+		      <if test="dto.carIdType==1">
+			 	 and t1.sub_model_id = t2.sub_model_id
+		 	 </if>
+		 	 <if test="dto.carIdType==2">
+		 	     and t1.version_id = t2.version_id
+		 	 </if>
+		 	 <if test="dto.carIdType==3 or dto.carIdType==4">
+		 	     and t1.manf_brand_id = t2.manf_brand_id
+		 	 </if>
+		)
+	</sql>
+	
+	<sql id="t_month_incentive">
+		/*月度激励*/
+		t_month_incentive AS
+		 (SELECT 
+		    <if test="dto.moneyOrRatio==1">
+		    	sum(sale_enco_mix * sale_enco)
+		    </if>
+		 	<if test="dto.moneyOrRatio==2">
+		 		case when msrp > 0 then
+		         sum(sale_enco_mix * sale_enco) * 100 / msrp 
+		         else null end
+		 	</if>
+		  AS sale_enco_sum, ym_id
+		  <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	  </if>
+	 	  <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	  </if>
+	 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	      ,manf_brand_id
+	 	  </if>
+		    FROM t_enco_data
+		   WHERE ways_sort = '月度激励'
+		   GROUP BY ym_id
+		   <if test="dto.carIdType==1">
+		 	   ,sub_model_id
+	 	   </if>
+	 	   <if test="dto.carIdType==2">
+	 	       ,version_id
+	 	   </if>
+	 	   <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	       ,manf_brand_id
+	 	   </if>
+	 	   <if test="dto.moneyOrRatio==2">
+	 	       ,msrp
+	 	   </if>
+		  )
+	</sql>
+	
+	<sql id="t_discount_incentive">
+		/*固定折扣*/
+		t_discount_incentive AS
+		 (SELECT 
+		 	<if test="dto.moneyOrRatio==1">
+		 		sum(sale_enco_mix * sale_enco)
+		 	</if>
+		 	<if test="dto.moneyOrRatio==2">
+		 		case when msrp>0 then sum(sale_enco_mix * sale_enco) * 100 / msrp else null end
+		 	</if>
+		  AS sale_enco_sum, ym_id
+		  <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	  </if>
+	 	  <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	  </if>
+	 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	      ,manf_brand_id
+	 	  </if>
+		    FROM t_enco_data
+		   WHERE ways_sort = '固定折扣'
+		   GROUP BY ym_id
+		   <if test="dto.carIdType==1">
+		 	   ,sub_model_id
+	 	   </if>
+	 	   <if test="dto.carIdType==2">
+	 	       ,version_id
+	 	   </if>
+	 	   <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	       ,manf_brand_id
+	 	   </if>
+	 	   <if test="dto.moneyOrRatio==2">
+	 	       ,msrp
+	 	   </if>
+		   )
+	</sql>
+	
+	<sql id="t_assess_incentive">
+		/*考核奖励*/
+		t_assess_incentive AS
+		 (SELECT 
+		 	<if test="dto.moneyOrRatio==1">
+		 		sum(sale_enco_mix * sale_enco)
+		 	</if>
+		 	<if test="dto.moneyOrRatio==2">
+		 		case when msrp >0 then sum(sale_enco_mix * sale_enco) * 100 / msrp else null end
+		 	</if>
+		  AS sale_enco_sum, ym_id
+		  <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	  </if>
+	 	  <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	  </if>
+	 	  <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	      ,manf_brand_id
+	 	  </if>
+		    FROM t_enco_data
+		   WHERE ways_sort = '考核奖励' 
+		   GROUP BY ym_id
+		   <if test="dto.carIdType==1">
+		 	  ,sub_model_id
+	 	   </if>
+	 	   <if test="dto.carIdType==2">
+	 	      ,version_id
+	 	   </if>
+	 	   <if test="dto.carIdType==3 or dto.carIdType==4">
+	 	       ,manf_brand_id
+	 	   </if>
+	 	   <if test="dto.moneyOrRatio==2">
+	 	       ,msrp
+	 	   </if>
+		   )
+	</sql>
+	
+	
+	<sql id="t_common_version_join">
+	    <if test="dto.carIdType==1">
+     		inner join dm_version v
+		      on r.version_id = v.version_id
+		     and r.standard_id = v.standard_id
+	    </if>
+		<if test="dto.carIdType==3">
+	   		 inner join dm_version v
+		       on r.version_id = v.version_id
+		      and v.standard_id = ${userInfo.standard_id}
+	   		 inner join dm_sub_model sm
+	   		    on sm.sub_model_id = v.sub_model_id
+	   		   and  sm.standard_id = v.standard_id
+			 inner join dm_model dm
+			    on dm.model_id = sm.model_id
+			   and dm.standard_id = sm.standard_id
+			 inner join dm_manf_brand mb
+			    on mb.manf_brand_id = dm.manf_brand_id
+			   and mb.standard_id = dm.standard_id
+	   </if>
+	   <if test="dto.carIdType==4">
+	   		 inner join dm_version v
+		        on r.version_id = v.version_id
+		       and v.standard_id = ${userInfo.standard_id}
+	   		 inner join dm_sub_model sm
+	   		    on sm.sub_model_id = v.sub_model_id
+	   		   and sm.standard_id = v.standard_id
+			 inner join dm_model dm
+			    on dm.model_id = sm.model_id
+			   and dm.standard_id = sm.standard_id
+			 inner join dm_manf_brand mb
+			    on mb.manf_brand_id = dm.manf_brand_id
+			   and mb.standard_id = dm.standard_id
+	   </if>
+	</sql>
+	
+	<sql id="t_common_version_where">
+		 st.ways_sort in ('固定折扣', '考核奖励', '月度激励')
+		 <if test="dto.timeType==1">
+	     	 and r.ym_id in (${dto.ym}, ${dto.ym1}, ${dto.ym2})
+	     </if>
+	     <if test="dto.timeType==2">
+	     	 and r.ym_id between ${dto.ym1} and ${dto.ym2}
+	     </if>
+	     <if test="dto.timeType==3">
+	     	 and r.ym_id = ${dto.ym}
+	     </if>
+	     <if test="dto.timeType==4">
+	     	 and r.ym_id in (${dto.ym1}, ${dto.ym2})
+	     </if>
+	     <if test="dto.buyCarId == 'seg'.toString() ">
+	     	 and v.sub_model_id in (${dto.ids})
+	     </if>
+	     <if test="dto.buyCarId == 'allSeg'.toString() ">
+	         and 
+	         <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(v.sub_model_id in (" separator="," close="))">
+	         	      <if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+	         </foreach>
+	     </if>
+	     <if test="dto.buyCarId != 'seg'.toString() and dto.buyCarId != 'allSeg'.toString()">
+		     <if test="dto.carIdType==1">
+			     and 
+			     <foreach collection="dto.idsList" index="index" item="item" open="(v.sub_model_id in (" separator="," close="))">
+		         		<if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+		         </foreach>
+		     </if>
+		     <if test="dto.carIdType==2">
+		         and r.version_id in (${dto.ids})
+		     </if>
+		     <if test="dto.carIdType==3">
+			     and mb.manf_id || '-' || mb.brand_id in (${dto.ids})
+			     and 
+		     	 <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(v.sub_model_id in (" separator="," close="))">
+		         		<if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+		         </foreach>
+		     </if>
+		     <if test="dto.carIdType==4">
+		     	 and mb.manf_brand_id in (${dto.ids})  
+		     	 and 
+		     	 <foreach collection="userInfo.sub_model_id" index="index" item="item" open="(v.sub_model_id in (" separator="," close="))">
+		         		<if test="(index % 999) == 998"> NULL ) OR v.sub_model_id IN (</if>${item}
+		         </foreach>
+		     </if>
+	     </if>
+	</sql>
+	
+	<!-- 获取共同型号 -->
+	<sql id="t_versions_month_excitation">
+	    <if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	    t_versions as (
+	        <if test="dto.moneyOrRatio==2">
+				select r.*,
+				       sum(r.sale_enco_mix*msrp.msrp*10000) over (partition by r.ym_id
+				       												 <if test="dto.carIdType==1">
+															         	 ,r.sub_model_id
+															         </if>
+															         <if test="dto.carIdType==2">
+															         	 ,r.version_id
+															         </if>
+				       ) as msrp
+				  from (
+	        </if>
+	        
+		         <if test="dto.carIdType!=2">
+			  		select r.*,
+			             case when sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																	 <if test="dto.carIdType==1">
+															         	 ,r.sub_model_id
+															         </if>
+															         <if test="dto.carIdType==3 or dto.carIdType==4">
+															             ,r.manf_brand_id
+															         </if>
+																	) > 0 then 
+				  		 sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																	 <if test="dto.carIdType==1">
+															         	 ,r.sub_model_id
+															         </if>
+															         <if test="dto.carIdType==3 or dto.carIdType==4">
+															             ,r.manf_brand_id
+															         </if>
+																	) else 0 end 
+						 AS sale_enco_mix
+				        from (
+		         </if>
+					SELECT r.ym_id, r.version_id<if test="dto.carIdType==2">,1 as sale_enco_mix</if>
+				    <if test="dto.carIdType==1">,v.sub_model_id</if>
+				    <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+				    FROM fdm_mis_reward_result_ym r
+				   <include refid="reward_sub_type_alone"></include>
+			       inner join <include refid="tpDifList"></include>
+				      on tp.version_id = r.version_id
+				     and tp.ym_id = r.ym_id
+				     and tp.tp > 0
+				    inner join <include refid="msrpDifList"></include>
+				       on msrp.version_id = r.version_id
+				      and msrp.ym_id = r.ym_id
+				      and msrp.unit_id = tp.unit_id
+                      and msrp.price_batch_id = tp.price_batch_id
+				      and msrp.msrp > 0
+				   <include refid="t_common_version_join"></include>
+				   WHERE
+				     <include refid="t_common_version_where"></include>
+				     and r.standard_id = ${userInfo.standard_id}
+				     and msrp.unit_id=${userInfo.org_id}
+					 and tp.unit_id=${userInfo.org_id}
+		             and msrp.price_batch_id=4
+		             and tp.price_batch_id=4
+				     group by r.ym_id,r.version_id
+				     <if test="dto.carIdType==1">,v.sub_model_id</if>
+				     <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+				   <if test="dto.carIdType!=2">
+					     ) r 
+					     left join 
+				          <include refid="mixDifList"></include>
+					      on m.version_id = r.version_id
+					     and m.ym_id = r.ym_id
+					     and m.sales>0
+					     <if test="dto.mixDifSign == 0">
+					     	 and m.data_type=${dto.isQuarter}
+			         	 </if>
+					     group by r.ym_id,r.version_id
+				         <if test="dto.carIdType==1">,r.sub_model_id</if>
+				         <if test="dto.carIdType==3 or dto.carIdType==4"> ,r.manf_brand_id </if>
+				    </if>
+				    
+				    <if test="dto.moneyOrRatio==2">
+					    ) r
+						   left join 
+						   <include refid="msrpDifList"></include>
+						      on msrp.version_id = r.version_id
+						     and msrp.ym_id = r.ym_id
+						     <if test="dto.msrpDifSign == 0">
+							     and msrp.unit_id=${userInfo.org_id} 
+							     and msrp.price_batch_id=4
+					     	 </if>
+				    </if>
+		)
+	</sql>
+	
+	<sql id="t_versions"> 
+	    <if test="dto.mixDifSign == 1">
+	    	<include refid="t_mix"></include>,
+	    </if>
+	    <if test="dto.tpDifSign == 1">
+	    	<include refid="t_tp"></include>,
+	    </if>
+	    <if test="dto.msrpDifSign == 1">
+	    	<include refid="t_msrp"></include>, 
+	    </if>
+	    t_versions as (
+			select r.ym_id, r.version_id, r.sale_enco_mix
+			       <if test="dto.carIdType==1">,r.sub_model_id</if>
+			       <if test="dto.carIdType==3 or dto.carIdType==4"> ,r.manf_brand_id </if>,
+			       sum(r.sale_enco_mix*r.msrp*10000) over (partition by r.ym_id
+			       												 <if test="dto.carIdType==1">
+														         	 ,r.sub_model_id
+														         </if>
+														         <if test="dto.carIdType==2">
+														         	 ,r.version_id
+														         </if>
+														         <if test="dto.carIdType==3 or dto.carIdType==4">
+														             ,r.manf_brand_id
+														         </if>
+			       ) as msrp,
+	   			   sum(r.sale_enco_mix*r.tp*10000) over (partition by r.ym_id
+	   			    											 <if test="dto.carIdType==1">
+														         	 ,r.sub_model_id
+														         </if>
+														         <if test="dto.carIdType==2">
+														         	 ,r.version_id
+														         </if>
+														         <if test="dto.carIdType==3 or dto.carIdType==4">
+														             ,r.manf_brand_id
+														         </if>
+	   			   ) as tp 
+			  from (
+			  		select r.*,
+			         <if test="dto.carIdType==2">
+			             1 
+			         </if>
+			         <if test="dto.carIdType!=2">
+			             case when sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																	 <if test="dto.carIdType==1">
+															         	 ,r.sub_model_id
+															         </if>
+															         <if test="dto.carIdType==3 or dto.carIdType==4">
+															             ,r.manf_brand_id
+															         </if>
+																	) > 0 then 
+				  		 sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																	 <if test="dto.carIdType==1">
+															         	 ,r.sub_model_id
+															         </if>
+															         <if test="dto.carIdType==3 or dto.carIdType==4">
+															             ,r.manf_brand_id
+															         </if>
+																	) else 0 end 
+			         </if>
+					 AS sale_enco_mix
+	        from (
+				SELECT r.ym_id, r.version_id, msrp.msrp, tp.tp
+			    <if test="dto.carIdType==1">,v.sub_model_id</if>
+			    <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+			    FROM  <include refid="tpDifList"></include>
+				inner join <include refid="msrpDifList"></include>
+	              on msrp.version_id = tp.version_id
+                 and msrp.ym_id = tp.ym_id
+                 and msrp.price_batch_id = tp.price_batch_id
+                 and msrp.unit_id = tp.unit_id
+			   inner join fdm_mis_reward_result_ym r
+                  on r.version_id = msrp.version_id
+                 and r.ym_id = msrp.ym_id
+               <include refid="reward_sub_type_alone"></include>
+               <include refid="t_common_version_join"></include>
+			   WHERE  
+			     <include refid="t_common_version_where"></include>
+			     and r.standard_id = ${userInfo.standard_id}
+			     and msrp.msrp > 0 and tp.tp > 0 and tp.unit_id = ${userInfo.org_id} and tp.price_batch_id = 4 
+			     group by r.ym_id,r.version_id, msrp.msrp, tp.tp
+			     <if test="dto.carIdType==1">,v.sub_model_id</if>
+			     <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+			     ) r 
+			   <if test="dto.carIdType!=2">
+			     left join 
+			          <include refid="mixDifList"></include>
+				      on m.version_id = r.version_id
+				     and m.ym_id = r.ym_id
+				     and m.sales>0
+				     <if test="dto.mixDifSign == 0">
+					     and m.data_type=${dto.isQuarter}
+			         </if>
+				     group by r.ym_id,r.version_id ,r.msrp, r.tp
+			         <if test="dto.carIdType==1">,r.sub_model_id</if>
+			         <if test="dto.carIdType==3 or dto.carIdType==4"> ,r.manf_brand_id </if>
+			    </if>
+			    ) r
+				   <!-- left join 
+				   <include refid="msrpDifList"></include>
+				      on msrp.version_id = r.version_id
+				     and msrp.ym_id = r.ym_id
+				     <if test="dto.msrpDifSign == 0">
+					     and msrp.unit_id=${userInfo.org_id} 
+					     and msrp.price_batch_id=4
+			     	 </if>
+				    left join 
+				    <include refid="tpDifList"></include>
+				      on tp.version_id = r.version_id
+				     and tp.ym_id = r.ym_id
+				     <if test="dto.tpDifSign == 0">
+					     and tp.unit_id=${userInfo.org_id} 
+					     and tp.price_batch_id=4
+			     	 </if> -->
+		)
+	</sql>
+	
+	<sql id="t_versions111">
+		select r.*,
+		       sum(r.sale_enco_mix*msrp.msrp*10000) over (partition by r.ym_id
+		       												 <if test="dto.carIdType==1">
+													         	 ,r.sub_model_id
+													         </if>
+													         <if test="dto.carIdType==2">
+													         	 ,r.version_id
+													         </if>
+													         <if test="dto.carIdType==3 or dto.carIdType==4">
+													             ,r.manf_brand_id
+													         </if>
+		       ) as msrp,
+   			   sum(r.sale_enco_mix*tp.tp*10000) over (partition by r.ym_id
+   			    											 <if test="dto.carIdType==1">
+													         	 ,r.sub_model_id
+													         </if>
+													         <if test="dto.carIdType==2">
+													         	 ,r.version_id
+													         </if>
+													         <if test="dto.carIdType==3 or dto.carIdType==4">
+													             ,r.manf_brand_id
+													         </if>
+   			   ) as tp 
+		  from (
+		  		select r.*,
+		         <if test="dto.carIdType==2">
+		             1 
+		         </if>
+		         <if test="dto.carIdType!=2">
+		             case when sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																 <if test="dto.carIdType==1">
+														         	 ,r.sub_model_id
+														         </if>
+														         <if test="dto.carIdType==3 or dto.carIdType==4">
+														             ,r.manf_brand_id
+														         </if>
+																) > 0 then 
+			  		 sum(m.sales) / sum(SUM(m.sales)) OVER(PARTITION BY r.YM_ID 
+																 <if test="dto.carIdType==1">
+														         	 ,r.sub_model_id
+														         </if>
+														         <if test="dto.carIdType==3 or dto.carIdType==4">
+														             ,r.manf_brand_id
+														         </if>
+																) else 0 end 
+		         </if>
+				 AS sale_enco_mix
+        from (
+			SELECT r.ym_id, r.version_id
+		    <if test="dto.carIdType==1">,v.sub_model_id</if>
+		    <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+		    FROM fdm_mis_reward_result_ym r
+		   <include refid="reward_sub_type_alone"></include>
+		   inner join 
+		   <include refid="tpDifList"></include>
+		      on tp.version_id = r.version_id
+		     and tp.ym_id = r.ym_id
+		     <if test="dto.tpDifSign == 0">
+			     and tp.unit_id=${userInfo.org_id} 
+			     and tp.price_batch_id=4
+		     </if>
+		   inner join 
+		   <include refid="msrpDifList"></include>
+		      on msrp.version_id = r.version_id
+		     and msrp.ym_id = r.ym_id
+		     <if test="dto.msrpDifSign == 0">
+			     and msrp.price_batch_id=4
+			     and msrp.unit_id=${userInfo.org_id} 
+		     </if>
+		   <include refid="t_common_version_join"></include>
+		   WHERE 
+		     <include refid="t_common_version_where"></include>
+		     and msrp.msrp>0 and tp.tp>0 and tp.unit_id = ${userInfo.org_id}
+		     group by r.ym_id,r.version_id
+		     <if test="dto.carIdType==1">,v.sub_model_id</if>
+		     <if test="dto.carIdType==3 or dto.carIdType==4"> ,mb.manf_brand_id </if>
+		     ) r 
+		   <if test="dto.carIdType!=2">
+		     left join 
+		          <include refid="mixDifList"></include>
+			      on m.version_id = r.version_id
+			     and m.ym_id = r.ym_id
+			     and m.sales>0
+			     <if test="dto.mixDifSign == 0">
+				     and m.data_type=${dto.isQuarter}
+		         </if>
+			     group by r.ym_id,r.version_id
+		         <if test="dto.carIdType==1">,r.sub_model_id</if>
+		         <if test="dto.carIdType==3 or dto.carIdType==4"> ,r.manf_brand_id </if>
+		    </if>
+		    ) r
+			   left join 
+			   <include refid="msrpDifList"></include>
+			      on msrp.version_id = r.version_id
+			     and msrp.ym_id = r.ym_id
+			     <if test="dto.msrpDifSign == 0">
+				     and msrp.unit_id=${userInfo.org_id} 
+				     and msrp.price_batch_id=4
+		     	 </if>
+			    left join 
+			    <include refid="tpDifList"></include>
+			      on tp.version_id = r.version_id
+			     and tp.ym_id = r.ym_id
+			     <if test="dto.tpDifSign == 0">
+				     and tp.unit_id=${userInfo.org_id} 
+				     and tp.price_batch_id=4
+		     	 </if>
+	</sql>
+	
+	
+</mapper>
