@@ -1,0 +1,1 @@
+groovyScript("def result='';  def params=\"${_1}\".replaceAll('[\\\\[|\\\\]|\\\\s]', '').split(',').toList();   for(i = 0; i < params.size(); i++) { if(!''.equals(params[i])) result+='\\n * @param ' + params[i];   };    return result", methodParameters())

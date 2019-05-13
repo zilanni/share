@@ -1,0 +1,1 @@
+groovyScript("def result='';  def params=\"${_1}\".replaceAll('[\\\\[|\\\\]|\\\\s]', '').split(',').toList();   for(i=0;i<params.size();i++){ if(!''.equals(params[i])) result+='\\n    @ApiImplicitParam(name = \"'+ params[i]+ '\",value = \"中文\", example=\"\", paramType = \"query\",required = true)'; if(i!=params.size()-1) result+=',';}; return result", methodParameters())
