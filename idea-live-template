@@ -1,0 +1,13 @@
+*
+ *
+ * @author zhongjiawen 
+ * @date $DATA$ $TIME$ $PARAM$ 
+ * @return $RETURN$
+*/
+
+
+
+@ApiOperation(value = "中文", notes = "中文", authorizations = {@Authorization(value = "token")})
+@ApiResponses(value = {@ApiResponse(code = 200, message = "OK")})
+@ApiImplicitParams({$PARAMS$
+})
